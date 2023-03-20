@@ -360,7 +360,7 @@ int main(int argc, char * argv[])
         exit(1);
     }
 
-    char data[8192];
+    char data[1<<16];
     size_t nread = read_entire_file(argv[1], data, sizeof(data));
 
     char dasm_str[32];
