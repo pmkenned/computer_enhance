@@ -65,6 +65,16 @@ enum {
     MOV_SEG_TO_REG_MEM,
 };
 
+size_t nbytes_table[] = {
+    [MOV_REG_MEM_TO_FROM_REG]   = 2,
+    [MOV_IMM_TO_REG_MEM]        = 2,
+    [MOV_IMM_TO_REG]            = 1,
+    [MOV_MEM_TO_ACC]            = 3,
+    [MOV_ACC_TO_MEM]            = 3,
+    [MOV_REG_MEM_TO_SEG]        = 2,
+    [MOV_SEG_TO_REG_MEM]        = 2,
+};
+
 static size_t
 dasm(char * bytes, char * buffer, size_t len)
 {
@@ -236,7 +246,7 @@ dasm_new(char * bytes, char * output, size_t len)
     // displacement bytes
 
     int ndisp = 0;
-    if (mov_type == MOV_REG_MEM_TO_FROM_REG |
+    if (mov_type == MOV_REG_MEM_TO_FROM_REG ||
         mov_type == MOV_IMM_TO_REG_MEM) {
         if      (mod == 0)  ndisp = (rm == 6) ? 2 : 0;
         else if (mod == 1)  ndisp = 1;
@@ -285,21 +295,12 @@ dasm_new(char * bytes, char * output, size_t len)
     }
     uint16_t addr = addr_lo + (addr_hi << 8);
 
-    // TODO: nbytes_table[mov_type] + ndisp + ndata;
-
-    switch (mov_type) {
-        case MOV_REG_MEM_TO_FROM_REG:   nbytes = 2 + ndisp;         break;
-        case MOV_IMM_TO_REG_MEM:        nbytes = 2 + ndisp + ndata; break;
-        case MOV_IMM_TO_REG:            nbytes = 1 + ndata;         break;
-        case MOV_MEM_TO_ACC:            nbytes = 3;                 break;
-        case MOV_ACC_TO_MEM:            nbytes = 3;                 break;
-        case MOV_REG_MEM_TO_SEG:        assert(0);
-        case MOV_SEG_TO_REG_MEM:        assert(0);
-    }
+    nbytes = nbytes_table[mov_type] + ndisp + ndata;
 
     int nprint = 0;
     char disp_str[32] = "";
     char rm_str[32] = "";
+
     if (mov_type == MOV_REG_MEM_TO_FROM_REG) {
         // reg/mem to/from reg
         int d       = (bytes[0] >> 1) & 0x1;
