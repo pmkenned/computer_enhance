@@ -512,7 +512,7 @@ typedef struct {
 } DecodedInstr;
 
 static size_t
-decode(char * bytes, DecodedInstr * result)
+decode_instr(char * bytes, DecodedInstr * result)
 {
     size_t nbytes = 0;
 
@@ -680,7 +680,7 @@ int main(int argc, char * argv[])
     long min_run_time = LONG_MAX;
     size_t ninstr = 0;
 #ifndef NRUNS
-#define NRUNS 10000
+#define NRUNS 1
 #endif
     for (int run = 0; run < NRUNS; run++) {
         declare_timer(1);
@@ -701,7 +701,7 @@ int main(int argc, char * argv[])
         size_t offset = 0;
         ninstr = 0;
         while (offset < nread) {
-            size_t nbytes = decode(file_data + offset, &dis[ninstr]);
+            size_t nbytes = decode_instr(file_data + offset, &dis[ninstr]);
             offset += nbytes;
             ninstr++;
             assert(ninstr < NELEMS(dis));
