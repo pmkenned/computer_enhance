@@ -130,7 +130,7 @@ dasm_v1(char * bytes, char * output, size_t len)
 {
     output[0] = '\0';
     size_t nbytes = 0;
-    int nprint = 0;
+    size_t nprint = 0;
 
     char disp_str[32] = "";
     char rm_str[32] = "";
@@ -497,7 +497,6 @@ dasm_v2(char * bytes, char * output, size_t len)
     return nbytes;
 }
 
-
 typedef struct {
     int mov_type;
     int16_t data;
@@ -707,7 +706,7 @@ int main(int argc, char * argv[])
             ninstr++;
             assert(ninstr < NELEMS(dis));
         }
-#if 0
+#if 1
         // single-threaded
         for (size_t i = 0; i < ninstr; i++) {
             sprint_instr(dis[i], dasm_str);
@@ -720,22 +719,22 @@ int main(int argc, char * argv[])
 #ifndef NTHREADS
 #define NTHREADS 2
 #endif
-        //pthread_t threads[NTHREADS];
-        //Range ranges[NTHREADS];
-        //for (size_t tid = 0; tid < NTHREADS; tid++) {
-        //    size_t start = tid*ninstr/NTHREADS;
-        //    size_t end = (tid+1)*ninstr/NTHREADS;
-        //    ranges[tid] = (Range) {
-        //        .start = start,
-        //        .end = end,
-        //        .run = run,
-        //        .tid = tid,
-        //    };
-        //    pthread_create(&threads[tid], NULL, thread_routine, &ranges[tid]);
-        //}
-        //for (size_t tid = 0; tid < NTHREADS; tid++) {
-        //    pthread_join(threads[tid], NULL);
-        //}
+        pthread_t threads[NTHREADS];
+        Range ranges[NTHREADS];
+        for (size_t tid = 0; tid < NTHREADS; tid++) {
+            size_t start = tid*ninstr/NTHREADS;
+            size_t end = (tid+1)*ninstr/NTHREADS;
+            ranges[tid] = (Range) {
+                .start = start,
+                .end = end,
+                .run = run,
+                .tid = tid,
+            };
+            pthread_create(&threads[tid], NULL, thread_routine, &ranges[tid]);
+        }
+        for (size_t tid = 0; tid < NTHREADS; tid++) {
+            pthread_join(threads[tid], NULL);
+        }
 #endif
 #endif
         stop_timer(1);
