@@ -3,7 +3,7 @@
 #set -x
 set -e
 
-gcc -O2 -o sim8086.exe sim8086.c
+gcc -O2 -o sim8086.exe sim8086.c -lpthread
 gcc -O2 -o gen_random_movs gen_random_movs.c
 
 ./gen_random_movs -i 100 > input/listing_0042_random.asm

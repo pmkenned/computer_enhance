@@ -8,6 +8,9 @@
 #include <limits.h>
 #include <inttypes.h>
 #include <assert.h>
+#include <pthread.h>
+
+#define NELEMS(X) (sizeof(X)/sizeof(X[0]))
 
 static size_t
 read_entire_file(const char * filename, char * buffer, size_t len)
@@ -432,7 +435,7 @@ dasm_v2(char * bytes, char * output, size_t len)
     // data bytes
     int ndata = 0;
     uint8_t data_lo = 0, data_hi = 0;
-    if (mov_type == MOV_IMM_TO_REG_MEM || 
+    if (mov_type == MOV_IMM_TO_REG_MEM ||
         mov_type == MOV_IMM_TO_REG) {
         ndata = w ? 2 : 1;
         int data_offset = 1;
@@ -455,7 +458,6 @@ dasm_v2(char * bytes, char * output, size_t len)
 
     nbytes = nbytes_table[mov_type] + ndisp + ndata;
 
-    char disp_str[32] = "";
     char rm_str[32] = "";
 
     if (mov_type == MOV_REG_MEM_TO_FROM_REG ||
@@ -495,7 +497,173 @@ dasm_v2(char * bytes, char * output, size_t len)
     return nbytes;
 }
 
-char file_data[1<<16];
+
+typedef struct {
+    int mov_type;
+    int16_t data;
+    union {
+        int16_t disp;
+        uint16_t addr;
+    };
+    unsigned int w : 1;
+    unsigned int d : 1;
+    unsigned int mod : 3;
+    unsigned int reg : 3;
+    unsigned int rm : 3;
+} DecodedInstr;
+
+static size_t
+decode(char * bytes, DecodedInstr * result)
+{
+    size_t nbytes = 0;
+
+    int mov_type;
+    if      ((bytes[0] & 0xfc) == 0x88) mov_type = MOV_REG_MEM_TO_FROM_REG;
+    else if ((bytes[0] & 0xfe) == 0xc6) mov_type = MOV_IMM_TO_REG_MEM;
+    else if ((bytes[0] & 0xf0) == 0xb0) mov_type = MOV_IMM_TO_REG;
+    else if ((bytes[0] & 0xfe) == 0xa0) mov_type = MOV_MEM_TO_ACC;
+    else if ((bytes[0] & 0xfe) == 0xa2) mov_type = MOV_ACC_TO_MEM;
+    else if ((bytes[0] & 0xff) == 0x8e) mov_type = MOV_REG_MEM_TO_SEG;
+    else if ((bytes[0] & 0xff) == 0x8c) mov_type = MOV_SEG_TO_REG_MEM;
+    else assert(0);
+
+    int w;
+    int reg;
+    int mod = (bytes[1] >> 6) & 0x3;
+    int rm  = (bytes[1] >> 0) & 0x7;
+    int d   = (bytes[0] >> 1) & 0x1;
+
+    if (mov_type == MOV_IMM_TO_REG) {
+        w = (bytes[0] >> 3) & 1;
+        reg = bytes[0] & 7;
+    } else {
+        w = bytes[0] & 1;
+        reg = (bytes[1] >> 3) & 0x7;
+    }
+
+    // displacement bytes
+    uint8_t disp_lo = 0, disp_hi = 0;
+    int ndisp = 0;
+    if (mov_type == MOV_REG_MEM_TO_FROM_REG ||
+        mov_type == MOV_IMM_TO_REG_MEM) {
+        if      (mod == 0)  ndisp = (rm == 6) ? 2 : 0;
+        else if (mod == 1)  ndisp = 1;
+        else if (mod == 2)  ndisp = 2;
+        else if (mod == 3)  ndisp = 0;
+        if (ndisp == 1) {
+            disp_lo = bytes[2];
+            disp_hi = (disp_lo & 0x80) ? 0xff : 0;
+        } else if (ndisp == 2) {
+            disp_lo = bytes[2];
+            disp_hi = bytes[3];
+        }
+    }
+    int16_t disp = disp_lo + (disp_hi << 8);
+
+    // data bytes
+    int ndata = 0;
+    uint8_t data_lo = 0, data_hi = 0;
+    if (mov_type == MOV_IMM_TO_REG_MEM || 
+        mov_type == MOV_IMM_TO_REG) {
+        ndata = w ? 2 : 1;
+        int data_offset = 1;
+        if (mov_type == MOV_IMM_TO_REG_MEM)
+            data_offset = 2 + ndisp;
+
+        if (ndata == 1) {
+            data_lo = bytes[data_offset];
+        } else if (ndata == 2) {
+            data_lo = bytes[data_offset];
+            data_hi = bytes[data_offset+1];
+        }
+    }
+    uint16_t data = data_lo + (data_hi << 8);
+
+    // addr bytes
+    uint8_t addr_lo = bytes[1];
+    uint8_t addr_hi = bytes[2];
+    uint16_t addr = addr_lo + (addr_hi << 8);
+
+    nbytes = nbytes_table[mov_type] + ndisp + ndata;
+
+    result->mov_type = mov_type;
+    result->disp     = disp;
+    result->data     = data;
+    result->mod      = mod;
+    result->reg      = reg;
+    result->rm       = rm;
+    result->w        = w;
+    result->d        = d;
+
+    if (mov_type == MOV_ACC_TO_MEM ||
+        mov_type == MOV_MEM_TO_ACC)
+        result->addr = addr;
+
+    assert(nbytes > 0);
+    return nbytes;
+}
+
+// TODO: test signedness of addr
+static void
+sprint_instr(DecodedInstr instr, char * output)
+{
+    char rm_str[32] = "";
+
+    if (instr.mov_type == MOV_REG_MEM_TO_FROM_REG ||
+        instr.mov_type == MOV_IMM_TO_REG_MEM) {
+        if (instr.mod == 0 && instr.rm == 6) {
+            direct_address(rm_str, instr.disp);
+        } else if (instr.mod == 3) {
+            strcpy(rm_str, reg_decode_table[instr.rm*2 + instr.w]);
+        } else {
+            displacement(rm_str, instr.rm, instr.disp);
+        }
+    }
+
+    if (instr.mov_type == MOV_REG_MEM_TO_FROM_REG) {
+        char * reg_str = reg_decode_table[instr.reg*2 + instr.w];
+        char * dst = instr.d ? reg_str : rm_str;
+        char * src = instr.d ? rm_str : reg_str;
+        reg_mem_to_from_reg(output, dst, src);
+    } else if (instr.mov_type == MOV_IMM_TO_REG_MEM) {
+        imm_to_reg_mem(output, rm_str, instr.w, instr.data);
+    } else if (instr.mov_type == MOV_IMM_TO_REG) {
+        char * dst = reg_decode_table[instr.reg*2+instr.w];
+        imm_to_reg(output, dst, instr.data);
+    } else if (instr.mov_type == MOV_MEM_TO_ACC) {
+        char * dst = instr.w ? "ax" : "al";
+        mem_to_acc(output, dst, instr.disp);
+    } else if (instr.mov_type == MOV_ACC_TO_MEM) {
+        char * src = instr.w ? "ax" : "al";
+        acc_to_mem(output, instr.disp, src);
+    } else {
+        assert(0);
+    }
+}
+
+char file_data[1<<18];
+DecodedInstr dis[1<<18];
+
+typedef struct {
+    size_t start;
+    size_t end; // non-inclusive
+    int run;
+    int tid;
+} Range;
+
+static void *
+thread_routine(void * arg)
+{
+    Range * rp = arg;
+    char dasm_str[32];
+    for (size_t i = rp->start; i < rp->end; i++) {
+        sprint_instr(dis[i], dasm_str);
+        if (rp->run == 0) {
+            printf("%d %s\n", rp->tid, dasm_str);
+        }
+    }
+    return NULL;
+}
 
 int main(int argc, char * argv[])
 {
@@ -511,28 +679,71 @@ int main(int argc, char * argv[])
     printf("bits 16\n");
 
     long min_run_time = LONG_MAX;
-    size_t nops = 0;
+    size_t ninstr = 0;
 #ifndef NRUNS
 #define NRUNS 10000
 #endif
     for (int run = 0; run < NRUNS; run++) {
         declare_timer(1);
         start_timer(1);
+#if 0
+        // combined decode and print
         size_t i = 0;
         while (i < nread) {
             size_t nbytes = dasm_v2(file_data + i, dasm_str, sizeof(dasm_str));
             i += nbytes;
             if (run == 0) {
-                nops++;
+                ninstr++;
                 printf("%s\n", dasm_str);
             }
         }
+#else
+        // separate decode and print
+        size_t offset = 0;
+        ninstr = 0;
+        while (offset < nread) {
+            size_t nbytes = decode(file_data + offset, &dis[ninstr]);
+            offset += nbytes;
+            ninstr++;
+            assert(ninstr < NELEMS(dis));
+        }
+#if 0
+        // single-threaded
+        for (size_t i = 0; i < ninstr; i++) {
+            sprint_instr(dis[i], dasm_str);
+            if (run == 0) {
+                printf("%s\n", dasm_str);
+            }
+        }
+#else
+        // multithreaded
+#ifndef NTHREADS
+#define NTHREADS 2
+#endif
+        //pthread_t threads[NTHREADS];
+        //Range ranges[NTHREADS];
+        //for (size_t tid = 0; tid < NTHREADS; tid++) {
+        //    size_t start = tid*ninstr/NTHREADS;
+        //    size_t end = (tid+1)*ninstr/NTHREADS;
+        //    ranges[tid] = (Range) {
+        //        .start = start,
+        //        .end = end,
+        //        .run = run,
+        //        .tid = tid,
+        //    };
+        //    pthread_create(&threads[tid], NULL, thread_routine, &ranges[tid]);
+        //}
+        //for (size_t tid = 0; tid < NTHREADS; tid++) {
+        //    pthread_join(threads[tid], NULL);
+        //}
+#endif
+#endif
         stop_timer(1);
         long run_time = get_elapsed_ns(1);
         if (run_time < min_run_time)
             min_run_time = run_time;
     }
-    //fprintf(stderr, "Input file size: %zu. Number of ops: %zu. Fastest time out of %d: %ldns\n", nread, nops, NRUNS, min_run_time);
+    //fprintf(stderr, "Input file size: %zu. Number of ops: %zu. Fastest time out of %d: %ldns\n", nread, ninstr, NRUNS, min_run_time);
     //fprintf(stderr, "%zu\t%ld\n", nread, min_run_time);
     fprintf(stderr, "%ld\n", min_run_time);
 
