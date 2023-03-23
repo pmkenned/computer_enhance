@@ -73,6 +73,10 @@ InstrData instructions[] = {
     // Accumulator-to-memory test
     { "mov [2554], ax", 3},
     { "mov [15], ax", 3},
+
+    // Immediate to direct address
+    { "mov [2554], byte 10", 5},
+    { "mov [15], word 300", 6},
 };
 
 enum {
